@@ -1,0 +1,58 @@
+#!/usr/bin/env python
+import rospy
+import tf2_ros
+from tf2_geometry_msgs import do_transform_pose
+from geometry_msgs.msg import TransformStamped, PoseStamped
+from tf.transformations import quaternion_inverse, quaternion_multiply
+
+class ViconToOdom:
+
+    def __init__(self):
+        self.pose_pub = rospy.Publisher('mavros_pose', PoseStamped, queue_size=1)
+        self.vicon_sub = rospy.Subscriber('vicon_tf', TransformStamped, self.vicon_cb)
+
+        self.initial_pose = None
+        self.transform_broadcaster = tf2_ros.TransformBroadcaster()
+
+    def vicon_cb(self, msg):
+        # Record the initial pose
+        if self.initial_pose is None:
+            self.initial_pose = msg
+            self.initial_pose.transform.rotation.x, \
+            self.initial_pose.transform.rotation.y, \
+            self.initial_pose.transform.rotation.z, \
+            self.initial_pose.transform.rotation.w = \
+                quaternion_inverse([self.initial_pose.transform.rotation.x,
+                                    self.initial_pose.transform.rotation.y,
+                                    self.initial_pose.transform.rotation.z,
+                                    self.initial_pose.transform.rotation.w])
+            self.initial_pose.transform.translation.x = -self.initial_pose.transform.translation.x
+            self.initial_pose.transform.translation.y = -self.initial_pose.transform.translation.y
+            self.initial_pose.transform.translation.z = -self.initial_pose.transform.translation.z
+            return
+
+        # Create a PoseStamped message from the TransformStamped message
+        pose_msg = PoseStamped()
+        pose_msg.header = msg.header
+        pose_msg.pose.position = msg.transform.translation
+        pose_msg.pose.orientation = msg.transform.rotation
+
+        # Apply the inverse transform of the initial pose to the new Vicon message
+        transformed_msg = do_transform_pose(pose_msg, self.initial_pose)
+        transformed_msg.header=msg.header
+        transformed_msg.header.frame_id='odom'
+        self.pose_pub.publish(transformed_msg)
+        
+        # Broadcast transform from vicon_world to odom
+        transform = TransformStamped()
+        transform.header.stamp = rospy.Time.now()
+        transform.header.frame_id = "vicon_world"
+        transform.child_frame_id = "odom"
+        transform.transform = self.initial_pose.transform
+        self.transform_broadcaster.sendTransform(transform)
+
+if __name__ == "__main__":
+    rospy.init_node('vicon_to_odom')
+    ViconToOdom()
+    rospy.spin()
+
